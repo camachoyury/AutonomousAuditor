@@ -1,0 +1,7 @@
+pandas==2.2.0
+markdown==3.5.2
+PyGithub==2.1.1
+python-dotenv==1.0.1
+google-adk==0.2.0
+pyjwt>=2.4.0
+pynacl>=1.4.0 
