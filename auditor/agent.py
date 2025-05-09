@@ -12,6 +12,9 @@ from github import Github
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.tools.function_tool import FunctionTool
+from auditor.core.prompts import MAIN_AGENT_PROMPT, COMPARISON_PROMPTS, ANALYSIS_PROMPTS, REPORT_PROMPTS
+from .agents.comparison_agent import ComparisonAgent
+from .agents.issue_manager import IssueManagerAgent
 
 # Cargar variables de entorno
 load_dotenv()
@@ -571,7 +574,43 @@ root_agent = LlmAgent(
     name="auditor_agent",
     model="gemini-2.0-flash",
     description="Agente para realizar auditorías financieras",
-    instruction="""Soy un agente especializado en auditoría financiera. 
-    Mi tarea es analizar documentos financieros y detectar discrepancias.""",
+    instruction=MAIN_AGENT_PROMPT,
     tools=[FunctionTool(run_audit)]
 )
+
+def main():
+    """Función principal que ejecuta la auditoría financiera."""
+    print(f"Iniciando auditoría financiera - {datetime.datetime.now()}")
+    
+    # Cargar variables de entorno
+    load_dotenv()
+    
+    try:
+        # Construir URL del repositorio
+        repo_owner = os.getenv('GITHUB_REPO_OWNER')
+        repo_name = os.getenv('GITHUB_REPO_NAME')
+        repo_url = f"https://github.com/{repo_owner}/{repo_name}"
+        
+        # Obtener documentos financieros
+        docs = retrieve_financial_docs(repo_url, os.getenv('GITHUB_BRANCH', 'main'))
+        
+        # Inicializar agentes
+        comparison_agent = ComparisonAgent()
+        issue_manager = IssueManagerAgent()
+        
+        # Comparar documentos
+        discrepancies = comparison_agent.compare_documents(docs['pl'], docs['balance'])
+        
+        # Crear o actualizar issue
+        if discrepancies:
+            issue_url = issue_manager.create_or_update_issue(discrepancies)
+            print(f"Se encontraron {len(discrepancies)} discrepancias. Issue creado/actualizado: {issue_url}")
+        else:
+            print("No se encontraron discrepancias en los documentos financieros.")
+            
+    except Exception as e:
+        print(f"Error durante la auditoría: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

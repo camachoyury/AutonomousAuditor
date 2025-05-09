@@ -1,90 +1,101 @@
-from google.adk import Agent, Tool
-from typing import List, Dict, Optional
+from google.adk.tools.function_tool import FunctionTool as Tool
+from google.adk.agents import Agent
+from typing import Dict, List, Optional
+from datetime import datetime
 from github import Github
 import os
-from datetime import datetime
+from dotenv import load_dotenv
+from auditor.core.prompts import REPORT_PROMPTS
 
-class IssueManagerAgent(Agent):
-    """Agente especializado en gestionar issues de GitHub para reportar discrepancias."""
-    
+class IssueManagerAgent:
     def __init__(self):
-        super().__init__()
-        self.github_client = Github(os.getenv('GITHUB_TOKEN'))
-        self.repo_owner = os.getenv('GITHUB_REPO_OWNER')
-        self.repo_name = os.getenv('GITHUB_REPO_NAME')
-        self.repo = self.github_client.get_user(self.repo_owner).get_repo(self.repo_name)
-    
-    @Tool
-    def create_or_update_issue(self, discrepancies: List[Dict], period: str) -> str:
-        """Crea o actualiza un issue de GitHub con las discrepancias encontradas.
+        self.agent = Agent(
+            name="issue_manager",
+            model="gemini-2.0-flash",
+            description="Agente para gestionar issues de GitHub",
+            tools=[Tool(self.create_or_update_issue)]
+        )
         
-        Args:
-            discrepancies (List[Dict]): Lista de discrepancias encontradas
-            period (str): Período de los reportes financieros
+        # Inicializar cliente de GitHub
+        self.github_token = os.getenv('GITHUB_TOKEN')
+        if not self.github_token:
+            raise ValueError("Token de GitHub no encontrado")
+        self.github = Github(self.github_token)
         
-        Returns:
-            str: URL del issue creado o actualizado
-        """
-        if not discrepancies:
-            return "No se encontraron discrepancias que reportar."
-        
-        # Crear título y cuerpo del issue
-        title = f"Discrepancias Financieras - {period}"
-        
-        # Organizar discrepancias por severidad
-        high_severity = [d for d in discrepancies if d['severity'] == 'high']
-        medium_severity = [d for d in discrepancies if d['severity'] == 'medium']
-        low_severity = [d for d in discrepancies if d['severity'] == 'low']
-        
-        body = f"""# Auditoría Financiera - {period}
-
-## Resumen
-Se encontraron {len(discrepancias)} discrepancias en los reportes financieros:
-- {len(high_severity)} de alta severidad
-- {len(medium_severity)} de severidad media
-- {len(low_severity)} de baja severidad
-
-## Discrepancias de Alta Severidad
+    def create_or_update_issue(self, discrepancies: List[Dict]) -> str:
+        """Crea o actualiza un issue en GitHub con las discrepancias encontradas."""
+        try:
+            # Obtener repositorio
+            repo_owner = os.getenv('GITHUB_REPO_OWNER')
+            repo_name = os.getenv('GITHUB_REPO_NAME')
+            repo = self.github.get_repo(f"{repo_owner}/{repo_name}")
+            
+            # Crear título y cuerpo del issue
+            title = REPORT_PROMPTS['issue_title'].format(
+                period="Q1 2024",
+                date=datetime.now().strftime("%Y-%m-%d")
+            )
+            
+            # Agrupar discrepancias por severidad
+            high_severity = [d for d in discrepancies if d['severity'] == 'high']
+            medium_severity = [d for d in discrepancies if d['severity'] == 'medium']
+            low_severity = [d for d in discrepancies if d['severity'] == 'low']
+            
+            # Generar secciones de severidad
+            severity_sections = ""
+            if high_severity:
+                severity_sections += "\n### 🔴 Discrepancias de Alta Severidad\n"
+                for d in high_severity:
+                    severity_sections += f"- {d['description']}\n"
+                    if 'fix' in d:
+                        severity_sections += f"  - **Propuesta de Corrección**: {d['fix']}\n"
+            
+            if medium_severity:
+                severity_sections += "\n### 🟡 Discrepancias de Severidad Media\n"
+                for d in medium_severity:
+                    severity_sections += f"- {d['description']}\n"
+                    if 'fix' in d:
+                        severity_sections += f"  - **Propuesta de Corrección**: {d['fix']}\n"
+            
+            if low_severity:
+                severity_sections += "\n### 🟢 Discrepancias de Baja Severidad\n"
+                for d in low_severity:
+                    severity_sections += f"- {d['description']}\n"
+                    if 'fix' in d:
+                        severity_sections += f"  - **Propuesta de Corrección**: {d['fix']}\n"
+            
+            # Generar recomendaciones
+            recommendations = """
+- Revisar y validar todas las discrepancias encontradas
+- Implementar las correcciones propuestas
+- Ejecutar una nueva auditoría después de las correcciones
+- Considerar implementar controles adicionales para prevenir futuras discrepancias
 """
-        
-        if high_severity:
-            for d in high_severity:
-                body += f"- ❌ {d['description']}\n"
-        else:
-            body += "- No se encontraron discrepancias de alta severidad\n"
-        
-        body += "\n## Discrepancias de Severidad Media\n"
-        if medium_severity:
-            for d in medium_severity:
-                body += f"- ⚠️ {d['description']}\n"
-        else:
-            body += "- No se encontraron discrepancias de severidad media\n"
-        
-        body += "\n## Discrepancias de Baja Severidad\n"
-        if low_severity:
-            for d in low_severity:
-                body += f"- ℹ️ {d['description']}\n"
-        else:
-            body += "- No se encontraron discrepancias de baja severidad\n"
-        
-        body += f"\n---\nÚltima actualización: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        # Buscar si ya existe un issue para este período
-        existing_issue = None
-        for issue in self.repo.get_issues(state='open'):
-            if issue.title == title:
-                existing_issue = issue
-                break
-        
-        if existing_issue:
-            # Actualizar issue existente
-            existing_issue.edit(body=body)
-            return existing_issue.html_url
-        else:
+            
+            # Crear cuerpo del issue
+            body = REPORT_PROMPTS['issue_body'].format(
+                period="Q1 2024",
+                date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                total_discrepancies=len(discrepancies),
+                severity_sections=severity_sections,
+                recommendations=recommendations
+            )
+            
+            # Buscar issue existente o crear uno nuevo
+            existing_issues = repo.get_issues(state='open')
+            for issue in existing_issues:
+                if issue.title == title:
+                    issue.edit(body=body)
+                    return issue.html_url
+            
             # Crear nuevo issue
-            new_issue = self.repo.create_issue(
+            issue = repo.create_issue(
                 title=title,
                 body=body,
-                labels=['auditoría', 'finanzas', 'discrepancia']
+                labels=['auditoría', 'finanzas', 'automático']
             )
-            return new_issue.html_url 
+            
+            return issue.html_url
+            
+        except Exception as e:
+            raise ValueError(f"Error al crear/actualizar issue: {str(e)}") 
