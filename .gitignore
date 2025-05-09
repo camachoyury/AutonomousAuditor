@@ -35,6 +35,14 @@ ENV/
 *.swp
 *.swo
 
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -43,4 +51,9 @@ Thumbs.db
 config.ini
 *.config
 credentials.json
-secrets.json 
+secrets.json
+
+# Project specific
+*.csv
+*.md
+!README.md 

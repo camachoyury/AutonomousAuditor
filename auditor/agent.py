@@ -1,6 +1,6 @@
 import datetime
 from zoneinfo import ZoneInfo
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any, Tuple
 import pandas as pd
 import markdown
 import re
@@ -21,14 +21,14 @@ class FinancialLineItem:
     name: str
     amount: Decimal
     category: str
-    period: str
+    period: Optional[str]
 
 class FinancialDocument:
-    def __init__(self, content: str, doc_type: str):
-        self.content = content
-        self.doc_type = doc_type  # 'pl' o 'balance'
-        self.parsed_data = None
-        self.file_format = self._detect_format()
+    def __init__(self, content: str, doc_type: str) -> None:
+        self.content: str = content
+        self.doc_type: str = doc_type  # 'pl' o 'balance'
+        self.parsed_data: Optional[Dict[str, Any]] = None
+        self.file_format: str = self._detect_format()
 
     def _detect_format(self) -> str:
         """Detecta si el documento es Markdown o CSV."""
@@ -36,14 +36,14 @@ class FinancialDocument:
             return 'markdown'
         return 'csv'
 
-    def parse(self) -> Dict:
+    def parse(self) -> Dict[str, Any]:
         """Parsea el documento financiero y extrae los datos relevantes."""
         if self.doc_type == 'pl':
             return self._parse_pl()
         else:
             return self._parse_balance()
 
-    def _parse_pl(self) -> Dict:
+    def _parse_pl(self) -> Dict[str, Any]:
         """Parsea un documento de P&L y extrae los datos relevantes."""
         try:
             if self.file_format == 'markdown':
@@ -53,18 +53,18 @@ class FinancialDocument:
         except Exception as e:
             raise ValueError(f"Error al parsear el P&L: {str(e)}")
 
-    def _parse_pl_markdown(self) -> Dict:
+    def _parse_pl_markdown(self) -> Dict[str, Any]:
         """Parsea un P&L en formato Markdown."""
-        lines = self.content.split('\n')
-        data = {
+        lines: List[str] = self.content.split('\n')
+        data: Dict[str, Any] = {
             'period': None,
             'revenue': [],
             'expenses': [],
             'totals': {}
         }
         
-        current_section = None
-        period_match = re.search(r'Periodo:\s*([^\n]+)', self.content)
+        current_section: Optional[str] = None
+        period_match: Optional[re.Match] = re.search(r'Periodo:\s*([^\n]+)', self.content)
         if period_match:
             data['period'] = period_match.group(1).strip()
 
@@ -82,11 +82,11 @@ class FinancialDocument:
             
             # Procesar líneas de datos
             if line.startswith('|'):
-                cells = [cell.strip() for cell in line.split('|')[1:-1]]
+                cells: List[str] = [cell.strip() for cell in line.split('|')[1:-1]]
                 if len(cells) >= 2:
-                    name = cells[0]
+                    name: str = cells[0]
                     try:
-                        amount = Decimal(cells[1].replace('$', '').replace(',', '').strip())
+                        amount: Decimal = Decimal(cells[1].replace('$', '').replace(',', '').strip())
                         
                         if current_section == 'ingresos':
                             data['revenue'].append(FinancialLineItem(
@@ -109,11 +109,11 @@ class FinancialDocument:
 
         return data
 
-    def _parse_pl_csv(self) -> Dict:
+    def _parse_pl_csv(self) -> Dict[str, Any]:
         """Parsea un P&L en formato CSV."""
         try:
-            df = pd.read_csv(StringIO(self.content))
-            data = {
+            df: pd.DataFrame = pd.read_csv(StringIO(self.content))
+            data: Dict[str, Any] = {
                 'period': None,
                 'revenue': [],
                 'expenses': [],
@@ -123,8 +123,8 @@ class FinancialDocument:
             # Asumimos que el CSV tiene columnas: Category, Item, Amount
             for _, row in df.iterrows():
                 try:
-                    amount = Decimal(str(row['Amount']).replace('$', '').replace(',', ''))
-                    item = FinancialLineItem(
+                    amount: Decimal = Decimal(str(row['Amount']).replace('$', '').replace(',', ''))
+                    item: FinancialLineItem = FinancialLineItem(
                         name=row['Item'],
                         amount=amount,
                         category=row['Category'].lower(),
@@ -144,7 +144,7 @@ class FinancialDocument:
         except Exception as e:
             raise ValueError(f"Error al parsear CSV: {str(e)}")
 
-    def _parse_balance(self) -> Dict:
+    def _parse_balance(self) -> Dict[str, Any]:
         """Parsea un Balance General y extrae los datos relevantes."""
         try:
             if self.file_format == 'markdown':
@@ -154,10 +154,10 @@ class FinancialDocument:
         except Exception as e:
             raise ValueError(f"Error al parsear el Balance: {str(e)}")
 
-    def _parse_balance_markdown(self) -> Dict:
+    def _parse_balance_markdown(self) -> Dict[str, Any]:
         """Parsea un Balance General en formato Markdown."""
-        lines = self.content.split('\n')
-        data = {
+        lines: List[str] = self.content.split('\n')
+        data: Dict[str, Any] = {
             'period': None,
             'activos': [],
             'pasivos': [],
@@ -165,8 +165,8 @@ class FinancialDocument:
             'totals': {}
         }
         
-        current_section = None
-        period_match = re.search(r'Periodo:\s*([^\n]+)', self.content)
+        current_section: Optional[str] = None
+        period_match: Optional[re.Match] = re.search(r'Periodo:\s*([^\n]+)', self.content)
         if period_match:
             data['period'] = period_match.group(1).strip()
 
@@ -184,11 +184,11 @@ class FinancialDocument:
             
             # Procesar líneas de datos
             if line.startswith('|'):
-                cells = [cell.strip() for cell in line.split('|')[1:-1]]
+                cells: List[str] = [cell.strip() for cell in line.split('|')[1:-1]]
                 if len(cells) >= 2:
-                    name = cells[0]
+                    name: str = cells[0]
                     try:
-                        amount = Decimal(cells[1].replace('$', '').replace(',', '').strip())
+                        amount: Decimal = Decimal(cells[1].replace('$', '').replace(',', '').strip())
                         
                         if current_section == 'activos':
                             data['activos'].append(FinancialLineItem(
@@ -218,11 +218,11 @@ class FinancialDocument:
 
         return data
 
-    def _parse_balance_csv(self) -> Dict:
+    def _parse_balance_csv(self) -> Dict[str, Any]:
         """Parsea un Balance General en formato CSV."""
         try:
-            df = pd.read_csv(StringIO(self.content))
-            data = {
+            df: pd.DataFrame = pd.read_csv(StringIO(self.content))
+            data: Dict[str, Any] = {
                 'period': None,
                 'activos': [],
                 'pasivos': [],
@@ -233,8 +233,8 @@ class FinancialDocument:
             # Asumimos que el CSV tiene columnas: Category, Item, Amount
             for _, row in df.iterrows():
                 try:
-                    amount = Decimal(str(row['Amount']).replace('$', '').replace(',', ''))
-                    item = FinancialLineItem(
+                    amount: Decimal = Decimal(str(row['Amount']).replace('$', '').replace(',', ''))
+                    item: FinancialLineItem = FinancialLineItem(
                         name=row['Item'],
                         amount=amount,
                         category=row['Category'].lower(),
@@ -319,7 +319,7 @@ def retrieve_financial_docs(repo_url: str, branch: str = "main") -> Dict[str, Fi
     except Exception as e:
         raise ValueError(f"Error al recuperar documentos: {str(e)}")
 
-def compare_documents(pl_doc: FinancialDocument, balance_doc: FinancialDocument) -> List[Dict]:
+def compare_documents(pl_doc: FinancialDocument, balance_doc: FinancialDocument) -> List[Dict[str, Any]]:
     """Compara los documentos financieros y detecta inconsistencias.
 
     Args:
@@ -427,7 +427,7 @@ def compare_documents(pl_doc: FinancialDocument, balance_doc: FinancialDocument)
     
     return discrepancies
 
-def create_github_issue(discrepancies: List[Dict], repo_url: str) -> str:
+def create_github_issue(discrepancies: List[Dict[str, Any]], repo_url: str) -> str:
     """Crea o actualiza un issue en GitHub con las discrepancias encontradas.
 
     Args:
@@ -521,7 +521,7 @@ def create_github_issue(discrepancies: List[Dict], repo_url: str) -> str:
     except Exception as e:
         raise ValueError(f"Error al crear issue: {str(e)}")
 
-def audit_financial_documents(repo_url: str, branch: str = "main") -> Dict:
+def audit_financial_documents(repo_url: str, branch: str = "main") -> Dict[str, Any]:
     """Función principal que orquesta el proceso de auditoría."""
     try:
         # 1. Recuperar documentos
@@ -548,7 +548,7 @@ def audit_financial_documents(repo_url: str, branch: str = "main") -> Dict:
             "error_message": str(e)
         }
 
-async def run_audit(repo_url: str, branch: str = "main") -> Dict:
+async def run_audit(repo_url: str, branch: str = "main") -> Dict[str, Any]:
     """Ejecuta una auditoría financiera.
 
     Args:
