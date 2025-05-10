@@ -24,15 +24,15 @@ class IssueManagerAgent(Agent):
         
         # Inicializar cliente de GitHub
         load_dotenv()
-        self.github_token = os.getenv('GITHUB_TOKEN')
-        if not self.github_token:
+        self._github_token = os.getenv('GITHUB_TOKEN')
+        if not self._github_token:
             raise ValueError("Token de GitHub no encontrado")
-        self.github = Github(self.github_token)
+        self._github = Github(self._github_token)
     
     def create_issue(self, discrepancies: List[Dict], repo_owner: str, repo_name: str) -> str:
         """Crea un nuevo issue en GitHub."""
         try:
-            repo = self.github.get_repo(f"{repo_owner}/{repo_name}")
+            repo = self._github.get_repo(f"{repo_owner}/{repo_name}")
             
             title = REPORT_PROMPTS['issue_title'].format(
                 period="Q1 2024",
@@ -55,7 +55,7 @@ class IssueManagerAgent(Agent):
     def update_issue(self, discrepancies: List[Dict], repo_owner: str, repo_name: str) -> str:
         """Actualiza un issue existente en GitHub."""
         try:
-            repo = self.github.get_repo(f"{repo_owner}/{repo_name}")
+            repo = self._github.get_repo(f"{repo_owner}/{repo_name}")
             
             title = REPORT_PROMPTS['issue_title'].format(
                 period="Q1 2024",

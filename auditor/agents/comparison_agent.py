@@ -19,6 +19,20 @@ class ComparisonAgent(Agent):
             ]
         )
     
+    def parse_content(self, content: str) -> Dict:
+        """Parsea el contenido de un documento financiero."""
+        from auditor.agent import FinancialDocument
+        
+        # Detectar tipo de documento basado en el contenido
+        if 'ingresos' in content.lower() or 'revenue' in content.lower():
+            doc_type = 'pl'
+        else:
+            doc_type = 'balance'
+            
+        # Crear y parsear documento
+        doc = FinancialDocument(content, doc_type)
+        return doc.parse()
+    
     def compare_periods(self, pl_data: Dict, balance_data: Dict) -> Optional[Dict]:
         """Compara los períodos de los documentos financieros."""
         if pl_data.get('period') != balance_data.get('period'):

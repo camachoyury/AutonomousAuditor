@@ -514,7 +514,11 @@ class AuditorAgent(LlmAgent):
         
         # Inicializar servicios y agentes
         self._session_service = InMemorySessionService()
-        self._runner = Runner()
+        self._runner = Runner(
+            app_name="financial_auditor",
+            agent=self,
+            session_service=self._session_service
+        )
         self._comparison_agent = ComparisonAgent()
         self._issue_manager = IssueManagerAgent()
     
