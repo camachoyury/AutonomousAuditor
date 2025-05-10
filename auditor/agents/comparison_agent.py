@@ -1,79 +1,42 @@
-from google.adk.tools.function_tool import FunctionTool as Tool
 from google.adk.agents import Agent
+from google.adk.tools.function_tool import FunctionTool
 from typing import Dict, List, Optional
 from decimal import Decimal
 from auditor.core.prompts import COMPARISON_PROMPTS, ANALYSIS_PROMPTS
 
-class ComparisonAgent:
+class ComparisonAgent(Agent):
+    """Agente especializado en comparar documentos financieros usando ADK."""
+    
     def __init__(self):
-        self.agent = Agent(
+        super().__init__(
             name="comparison_agent",
             model="gemini-2.0-flash",
-            description="Agente para comparar documentos financieros",
-            tools=[Tool(self.compare_documents)]
+            description="Agente para comparar documentos financieros y detectar discrepancias",
+            tools=[
+                FunctionTool(self.compare_periods),
+                FunctionTool(self.compare_net_income),
+                FunctionTool(self.analyze_ratios)
+            ]
         )
     
-    def compare_documents(self, pl_doc, balance_doc):
-        """Compara dos documentos financieros y detecta discrepancias."""
-        try:
-            # Parsear documentos
-            pl_data = pl_doc.parse()
-            balance_data = balance_doc.parse()
-            
-            discrepancies = []
-            
-            # Verificar períodos
-            if pl_data['period'] != balance_data['period']:
-                discrepancies.append({
-                    'type': 'period_mismatch',
-                    'description': f"Los períodos no coinciden: P&L ({pl_data['period']}) vs Balance ({balance_data['period']})",
-                    'severity': 'high'
-                })
-            
-            # Verificar utilidad neta
-            pl_net_income = pl_data['totals'].get('Utilidad Neta')
-            balance_net_income = None
-            for item in balance_data['capital_contable']:
-                if 'utilidad' in item.name.lower():
-                    balance_net_income = item.amount
-                    break
-            
-            if pl_net_income and balance_net_income and pl_net_income != balance_net_income:
-                discrepancies.append({
-                    'type': 'net_income_mismatch',
-                    'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
-                    'severity': 'high'
-                })
-            
-            return discrepancies
-            
-        except Exception as e:
-            return [{
-                'type': 'error',
-                'description': f"Error al comparar documentos: {str(e)}",
-                'severity': 'high'
-            }]
-    
-    @Tool
-    def compare_documents_old(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
-        """Compara los documentos financieros y detecta inconsistencias."""
-        discrepancies = []
-        
-        # Verificar que los períodos coincidan
+    def compare_periods(self, pl_data: Dict, balance_data: Dict) -> Optional[Dict]:
+        """Compara los períodos de los documentos financieros."""
         if pl_data.get('period') != balance_data.get('period'):
             prompt = COMPARISON_PROMPTS['period_match'].format(
                 pl_period=pl_data.get('period'),
                 balance_period=balance_data.get('period')
             )
-            discrepancies.append({
+            return {
                 'type': 'period_mismatch',
                 'description': f"Los períodos no coinciden: P&L ({pl_data.get('period')}) vs Balance ({balance_data.get('period')})",
                 'severity': 'high',
                 'fix': 'Asegurarse de que ambos documentos correspondan al mismo período contable.',
                 'prompt_used': prompt
-            })
-        
-        # Verificar que la utilidad neta coincida
+            }
+        return None
+    
+    def compare_net_income(self, pl_data: Dict, balance_data: Dict) -> Optional[Dict]:
+        """Compara la utilidad neta entre los documentos."""
         pl_net_income = self._find_net_income(pl_data)
         balance_net_income = self._find_net_income(balance_data)
         
@@ -84,15 +47,18 @@ class ComparisonAgent:
                 tolerance=Decimal('0.01')
             )
             if abs(pl_net_income - balance_net_income) > Decimal('0.01'):
-                discrepancies.append({
+                return {
                     'type': 'income_mismatch',
                     'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
                     'severity': 'high',
                     'fix': f"Ajustar la utilidad neta en el Balance General para que coincida con el P&L: ${pl_net_income}",
                     'prompt_used': prompt
-                })
-        
-        # Verificar ratios y ecuaciones
+                }
+        return None
+    
+    def analyze_ratios(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
+        """Analiza ratios financieros y detecta anomalías."""
+        discrepancies = []
         pl_totals = pl_data.get('totals', {})
         balance_totals = balance_data.get('totals', {})
         

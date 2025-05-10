@@ -7,7 +7,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.adk.tools.function_tool import FunctionTool
 from typing import Dict, List, Optional, Any, Union
-from auditor.agent import audit_financial_documents
+from auditor.agent import audit_financial_documents, retrieve_financial_docs, compare_documents, create_github_issue
 import hmac
 import hashlib
 
@@ -42,7 +42,12 @@ root_agent: LlmAgent = LlmAgent(
     instruction="""Soy un agente especializado en auditoría financiera. 
     Mi tarea es analizar documentos financieros y detectar discrepancias.
     Puedo recuperar documentos de GitHub, analizarlos y crear issues con los hallazgos.""",
-    tools=[FunctionTool(run_audit)]
+    tools=[
+        FunctionTool(run_audit),
+        FunctionTool(retrieve_financial_docs),
+        FunctionTool(compare_documents),
+        FunctionTool(create_github_issue)
+    ]
 )
 
 # Crear servicio de sesiones

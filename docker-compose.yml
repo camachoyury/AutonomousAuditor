@@ -1,9 +1,13 @@
 version: '3.8'
 
 services:
-  auditor:
+  financial-auditor:
     build: .
     container_name: financial-auditor
+    volumes:
+      - .:/app
+    env_file:
+      - .env
     ports:
       - "8080:8080"
     environment:
@@ -13,8 +17,6 @@ services:
       - GITHUB_BRANCH=main
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - .:/app
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/docs"]
@@ -23,3 +25,11 @@ services:
       retries: 3
       start_period: 40s
     command: python -m auditor.agent
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2'
+        reservations:
+          memory: 2G
+          cpus: '1'

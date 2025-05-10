@@ -7,6 +7,7 @@ WORKDIR /app
 # Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar archivos de requisitos
@@ -17,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código fuente
 COPY . .
+
+# Instalar el paquete en modo desarrollo
+RUN pip install -e .
 
 # Comando por defecto
 CMD ["python", "-m", "auditor.agent"] 

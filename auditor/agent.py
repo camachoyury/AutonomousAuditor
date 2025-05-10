@@ -1,3 +1,4 @@
+import sys
 import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Union, Any, Tuple
@@ -12,6 +13,8 @@ from github import Github
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
 from google.adk.tools.function_tool import FunctionTool
+from google.adk.sessions import InMemorySessionService
+from google.adk.runners import Runner
 from auditor.core.prompts import MAIN_AGENT_PROMPT, COMPARISON_PROMPTS, ANALYSIS_PROMPTS, REPORT_PROMPTS
 from .agents.comparison_agent import ComparisonAgent
 from .agents.issue_manager import IssueManagerAgent
@@ -259,7 +262,60 @@ class FinancialDocument:
         except Exception as e:
             raise ValueError(f"Error al parsear CSV: {str(e)}")
 
-def retrieve_financial_docs(repo_url: str, branch: str = "main") -> Dict[str, FinancialDocument]:
+def compare_documents(pl_content: str, balance_content: str) -> List[Dict[str, Any]]:
+    """Compara los documentos financieros y detecta inconsistencias.
+
+    Args:
+        pl_content (str): Contenido del documento P&L
+        balance_content (str): Contenido del documento Balance
+
+    Returns:
+        List[Dict]: Lista de discrepancias encontradas con propuestas de corrección
+    """
+    # Crear instancias de FinancialDocument
+    pl_doc = FinancialDocument(pl_content, 'pl')
+    balance_doc = FinancialDocument(balance_content, 'balance')
+    
+    # Parsear ambos documentos
+    pl_data = pl_doc.parse()
+    balance_data = balance_doc.parse()
+    
+    discrepancies = []
+    
+    # Verificar que los períodos coincidan
+    if pl_data.get('period') != balance_data.get('period'):
+        discrepancies.append({
+            'type': 'period_mismatch',
+            'description': f"Los períodos no coinciden: P&L ({pl_data.get('period')}) vs Balance ({balance_data.get('period')})",
+            'severity': 'high',
+            'fix': 'Asegurarse de que ambos documentos correspondan al mismo período contable.'
+        })
+    
+    # Verificar que la utilidad neta coincida con la utilidad del período en el balance
+    pl_net_income = None
+    for item in pl_data.get('totals', {}).items():
+        if 'utilidad' in item[0].lower() or 'net' in item[0].lower():
+            pl_net_income = item[1]
+            break
+    
+    balance_net_income = None
+    for item in balance_data.get('capital_contable', []):
+        if 'utilidad' in item.name.lower() or 'net' in item.name.lower():
+            balance_net_income = item.amount
+            break
+    
+    if pl_net_income is not None and balance_net_income is not None:
+        if abs(pl_net_income - balance_net_income) > Decimal('0.01'):
+            discrepancies.append({
+                'type': 'income_mismatch',
+                'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
+                'severity': 'high',
+                'fix': f"Ajustar la utilidad neta en el Balance General para que coincida con el P&L: ${pl_net_income}"
+            })
+    
+    return discrepancies
+
+def retrieve_financial_docs(repo_url: str, branch: str = "main") -> Dict[str, str]:
     """Recupera los documentos financieros del repositorio.
 
     Args:
@@ -267,9 +323,9 @@ def retrieve_financial_docs(repo_url: str, branch: str = "main") -> Dict[str, Fi
         branch (str): Rama del repositorio a consultar (default: "main")
 
     Returns:
-        Dict[str, FinancialDocument]: Diccionario con los documentos parseados
-            - 'pl': Documento de P&L
-            - 'balance': Documento de Balance General
+        Dict[str, str]: Diccionario con los contenidos de los documentos
+            - 'pl': Contenido del documento P&L
+            - 'balance': Contenido del documento Balance
     
     Raises:
         ValueError: Si hay errores al acceder al repositorio o los documentos
@@ -315,120 +371,12 @@ def retrieve_financial_docs(repo_url: str, branch: str = "main") -> Dict[str, Fi
         balance_content = repo.get_contents(balance_files[0].path, ref=branch).decoded_content.decode('utf-8')
         
         return {
-            'pl': FinancialDocument(pl_content, 'pl'),
-            'balance': FinancialDocument(balance_content, 'balance')
+            'pl': pl_content,
+            'balance': balance_content
         }
         
     except Exception as e:
         raise ValueError(f"Error al recuperar documentos: {str(e)}")
-
-def compare_documents(pl_doc: FinancialDocument, balance_doc: FinancialDocument) -> List[Dict[str, Any]]:
-    """Compara los documentos financieros y detecta inconsistencias.
-
-    Args:
-        pl_doc (FinancialDocument): Documento de P&L
-        balance_doc (FinancialDocument): Documento de Balance General
-
-    Returns:
-        List[Dict]: Lista de discrepancias encontradas con propuestas de corrección
-    """
-    discrepancies = []
-    
-    # Parsear ambos documentos
-    pl_data = pl_doc.parse()
-    balance_data = balance_doc.parse()
-    
-    # Verificar que los períodos coincidan
-    if pl_data.get('period') != balance_data.get('period'):
-        discrepancies.append({
-            'type': 'period_mismatch',
-            'description': f"Los períodos no coinciden: P&L ({pl_data.get('period')}) vs Balance ({balance_data.get('period')})",
-            'severity': 'high',
-            'fix': 'Asegurarse de que ambos documentos correspondan al mismo período contable.'
-        })
-    
-    # Verificar que la utilidad neta coincida con la utilidad del período en el balance
-    pl_net_income = None
-    for item in pl_data.get('totals', {}).items():
-        if 'utilidad' in item[0].lower() or 'net' in item[0].lower():
-            pl_net_income = item[1]
-            break
-    
-    balance_net_income = None
-    for item in balance_data.get('capital_contable', []):
-        if 'utilidad' in item.name.lower() or 'net' in item.name.lower():
-            balance_net_income = item.amount
-            break
-    
-    if pl_net_income is not None and balance_net_income is not None:
-        if abs(pl_net_income - balance_net_income) > Decimal('0.01'):
-            discrepancies.append({
-                'type': 'income_mismatch',
-                'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
-                'severity': 'high',
-                'fix': f"Ajustar la utilidad neta en el Balance General para que coincida con el P&L: ${pl_net_income}"
-            })
-    
-    # Verificar cambios en ganancias retenidas
-    retained_earnings = None
-    for item in balance_data.get('capital_contable', []):
-        if 'retenidas' in item.name.lower() or 'retained' in item.name.lower():
-            retained_earnings = item.amount
-            break
-    
-    if retained_earnings is not None and pl_net_income is not None:
-        expected_retained_earnings = retained_earnings + pl_net_income
-        if abs(expected_retained_earnings - retained_earnings) > Decimal('0.01'):
-            discrepancies.append({
-                'type': 'retained_earnings_mismatch',
-                'description': f"Las ganancias retenidas no reflejan la utilidad del período. Actual: ${retained_earnings}, Esperado: ${expected_retained_earnings}",
-                'severity': 'high',
-                'fix': f"Ajustar las ganancias retenidas para incluir la utilidad del período: ${expected_retained_earnings}"
-            })
-    
-    # Verificar que los totales sean consistentes
-    pl_totals = pl_data.get('totals', {})
-    balance_totals = balance_data.get('totals', {})
-    
-    # Verificar que los ingresos totales sean razonables en comparación con los activos
-    if 'Ingresos Totales' in pl_totals and 'Total Activos' in balance_totals:
-        revenue = pl_totals['Ingresos Totales']
-        assets = balance_totals['Total Activos']
-        if revenue > assets * Decimal('2'):
-            discrepancies.append({
-                'type': 'unusual_ratio',
-                'description': f"Los ingresos (${revenue}) son inusualmente altos en comparación con los activos (${assets})",
-                'severity': 'medium',
-                'fix': 'Verificar que todos los activos estén correctamente registrados y valorados.'
-            })
-    
-    # Verificar que los gastos totales sean razonables en comparación con los ingresos
-    if 'Gastos Totales' in pl_totals and 'Ingresos Totales' in pl_totals:
-        expenses = pl_totals['Gastos Totales']
-        revenue = pl_totals['Ingresos Totales']
-        if expenses > revenue:
-            discrepancies.append({
-                'type': 'expense_ratio',
-                'description': f"Los gastos (${expenses}) son mayores que los ingresos (${revenue})",
-                'severity': 'high',
-                'fix': 'Revisar y validar todos los gastos registrados. Verificar si hay gastos duplicados o incorrectamente clasificados.'
-            })
-    
-    # Verificar que el balance esté balanceado
-    if 'Total Activos' in balance_totals and 'Total Pasivos' in balance_totals and 'Total Capital Contable' in balance_totals:
-        assets = balance_totals['Total Activos']
-        liabilities = balance_totals['Total Pasivos']
-        equity = balance_totals['Total Capital Contable']
-        
-        if abs(assets - (liabilities + equity)) > Decimal('0.01'):
-            discrepancies.append({
-                'type': 'unbalanced',
-                'description': f"El balance no está balanceado: Activos (${assets}) ≠ Pasivos (${liabilities}) + Capital (${equity})",
-                'severity': 'high',
-                'fix': f"Ajustar las cuentas para mantener la ecuación contable: A = P + C. Diferencia actual: ${abs(assets - (liabilities + equity))}"
-            })
-    
-    return discrepancies
 
 def create_github_issue(discrepancies: List[Dict[str, Any]], repo_url: str) -> str:
     """Crea o actualiza un issue en GitHub con las discrepancias encontradas.
@@ -530,14 +478,10 @@ def audit_financial_documents(repo_url: str, branch: str = "main") -> Dict[str, 
         # 1. Recuperar documentos
         docs = retrieve_financial_docs(repo_url, branch)
         
-        # 2. Parsear documentos
-        pl_data = docs['pl'].parse()
-        balance_data = docs['balance'].parse()
-        
-        # 3. Comparar documentos
+        # 2. Comparar documentos
         discrepancies = compare_documents(docs['pl'], docs['balance'])
         
-        # 4. Crear/actualizar issue
+        # 3. Crear/actualizar issue
         issue_url = create_github_issue(discrepancies, repo_url)
         
         return {
@@ -551,39 +495,73 @@ def audit_financial_documents(repo_url: str, branch: str = "main") -> Dict[str, 
             "error_message": str(e)
         }
 
-async def run_audit(repo_url: str, branch: str = "main") -> Dict[str, Any]:
-    """Ejecuta una auditoría financiera.
-
-    Args:
-        repo_url (str): URL del repositorio GitHub a auditar
-        branch (str): Rama del repositorio a auditar (default: "main")
-
-    Returns:
-        Dict: Resultado de la auditoría con el estado y las discrepancias encontradas
-    """
-    try:
-        result = audit_financial_documents(repo_url, branch)
-        return result
-    except Exception as e:
-        return {
-            "status": "error",
-            "error_message": str(e)
-        }
-
-root_agent = LlmAgent(
-    name="auditor_agent",
-    model="gemini-2.0-flash",
-    description="Agente para realizar auditorías financieras",
-    instruction=MAIN_AGENT_PROMPT,
-    tools=[FunctionTool(run_audit)]
-)
+class AuditorAgent(LlmAgent):
+    """Agente principal para la auditoría financiera usando ADK."""
+    
+    def __init__(self):
+        # Inicializar agente principal
+        super().__init__(
+            name="auditor_agent",
+            model="gemini-2.0-flash",
+            description="Agente principal para realizar auditorías financieras",
+            instruction=MAIN_AGENT_PROMPT,
+            tools=[
+                FunctionTool(self.retrieve_documents),
+                FunctionTool(self.analyze_documents),
+                FunctionTool(self.report_findings)
+            ]
+        )
+        
+        # Inicializar servicios y agentes
+        self._session_service = InMemorySessionService()
+        self._runner = Runner()
+        self._comparison_agent = ComparisonAgent()
+        self._issue_manager = IssueManagerAgent()
+    
+    @property
+    def comparison_agent(self) -> ComparisonAgent:
+        """Obtiene el agente de comparación."""
+        return self._comparison_agent
+    
+    @property
+    def issue_manager(self) -> IssueManagerAgent:
+        """Obtiene el agente de gestión de issues."""
+        return self._issue_manager
+    
+    def retrieve_documents(self, repo_url: str, branch: str = "main") -> Dict[str, str]:
+        """Recupera los documentos financieros del repositorio."""
+        return retrieve_financial_docs(repo_url, branch)
+    
+    def analyze_documents(self, docs: Dict[str, str]) -> List[Dict]:
+        """Analiza los documentos financieros usando el agente de comparación."""
+        pl_data = self.comparison_agent.parse_content(docs['pl'])
+        balance_data = self.comparison_agent.parse_content(docs['balance'])
+        
+        discrepancies = []
+        
+        # Comparar períodos
+        period_discrepancy = self.comparison_agent.compare_periods(pl_data, balance_data)
+        if period_discrepancy:
+            discrepancies.append(period_discrepancy)
+        
+        # Comparar utilidad neta
+        income_discrepancy = self.comparison_agent.compare_net_income(pl_data, balance_data)
+        if income_discrepancy:
+            discrepancies.append(income_discrepancy)
+        
+        # Analizar ratios
+        ratio_discrepancies = self.comparison_agent.analyze_ratios(pl_data, balance_data)
+        discrepancies.extend(ratio_discrepancies)
+        
+        return discrepancies
+    
+    def report_findings(self, discrepancies: List[Dict], repo_owner: str, repo_name: str) -> str:
+        """Reporta los hallazgos usando el agente de gestión de issues."""
+        return self.issue_manager.update_issue(discrepancies, repo_owner, repo_name)
 
 def main():
     """Función principal que ejecuta la auditoría financiera."""
     print(f"Iniciando auditoría financiera - {datetime.datetime.now()}")
-    
-    # Cargar variables de entorno
-    load_dotenv()
     
     try:
         # Construir URL del repositorio
@@ -591,19 +569,15 @@ def main():
         repo_name = os.getenv('GITHUB_REPO_NAME')
         repo_url = f"https://github.com/{repo_owner}/{repo_name}"
         
-        # Obtener documentos financieros
-        docs = retrieve_financial_docs(repo_url, os.getenv('GITHUB_BRANCH', 'main'))
+        # Inicializar agente principal
+        auditor = AuditorAgent()
         
-        # Inicializar agentes
-        comparison_agent = ComparisonAgent()
-        issue_manager = IssueManagerAgent()
+        # Ejecutar auditoría
+        docs = auditor.retrieve_documents(repo_url, os.getenv('GITHUB_BRANCH', 'main'))
+        discrepancies = auditor.analyze_documents(docs)
         
-        # Comparar documentos
-        discrepancies = comparison_agent.compare_documents(docs['pl'], docs['balance'])
-        
-        # Crear o actualizar issue
         if discrepancies:
-            issue_url = issue_manager.create_or_update_issue(discrepancies)
+            issue_url = auditor.report_findings(discrepancies, repo_owner, repo_name)
             print(f"Se encontraron {len(discrepancies)} discrepancias. Issue creado/actualizado: {issue_url}")
         else:
             print("No se encontraron discrepancias en los documentos financieros.")
@@ -611,6 +585,20 @@ def main():
     except Exception as e:
         print(f"Error durante la auditoría: {str(e)}")
         sys.exit(1)
+
+# Crear el agente raíz para ADK
+root_agent = LlmAgent(
+    name="financial_auditor",
+    model="gemini-2.0-flash",
+    description="Agente para realizar auditorías financieras",
+    instruction=MAIN_AGENT_PROMPT,
+    tools=[
+        FunctionTool(audit_financial_documents),
+        FunctionTool(retrieve_financial_docs),
+        FunctionTool(compare_documents),
+        FunctionTool(create_github_issue)
+    ]
+)
 
 if __name__ == "__main__":
     main()
