@@ -16,7 +16,7 @@ COPY requirements.txt .
 # Instalar dependencias de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente
+# Copiar el código fuente y el archivo .env
 COPY . .
 
 # Instalar el paquete en modo desarrollo
