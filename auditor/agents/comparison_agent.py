@@ -1,92 +1,79 @@
-from google.adk import Agent, Tool
-from typing import Dict, List
+from google.adk.agents import Agent
+from google.adk.tools.function_tool import FunctionTool
+from typing import Dict, List, Optional
 from decimal import Decimal
+from ..core.adk_prompts import (
+    FINANCIAL_VALIDATION_PROMPT,
+    RATIO_ANALYSIS_PROMPT,
+    BALANCE_VALIDATION_PROMPT
+)
+from ..core.adk_parser import (
+    parse_validation_response,
+    parse_ratio_response,
+    parse_balance_response
+)
 
 class ComparisonAgent(Agent):
-    """Agente especializado en comparar documentos financieros."""
+    """Agente especializado en comparar documentos financieros usando ADK."""
     
     def __init__(self):
-        super().__init__()
+        super().__init__(
+            name="comparison_agent",
+            model="gemini-2.0-flash",
+            description="Agente para comparar documentos financieros y detectar discrepancias",
+            tools=[
+                FunctionTool(self.validate_financial_documents),
+                FunctionTool(self.analyze_ratios),
+                FunctionTool(self.validate_balance_equation)
+            ]
+        )
     
-    @Tool
-    def compare_documents(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
-        """Compara los documentos financieros y detecta inconsistencias.
+    def validate_financial_documents(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
+        """Valida la consistencia entre P&L y Balance usando ADK."""
+        prompt = FINANCIAL_VALIDATION_PROMPT.format(
+            pl_data=pl_data,
+            balance_data=balance_data
+        )
         
-        Args:
-            pl_data (Dict): Datos del P&L
-            balance_data (Dict): Datos del Balance General
+        response = self.generate(prompt)
+        return parse_validation_response(response)
+    
+    def analyze_ratios(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
+        """Analiza ratios financieros usando ADK."""
+        # Calcular ratios
+        revenue = pl_data.get('totals', {}).get('Ingresos Totales', Decimal('0'))
+        expenses = pl_data.get('totals', {}).get('Gastos Totales', Decimal('0'))
+        assets = balance_data.get('totals', {}).get('Total Activos', Decimal('0'))
+        liabilities = balance_data.get('totals', {}).get('Total Pasivos', Decimal('0'))
         
-        Returns:
-            List[Dict]: Lista de discrepancias encontradas
-        """
-        discrepancies = []
+        revenue_assets_ratio = revenue / assets if assets else Decimal('0')
+        expense_revenue_ratio = expenses / revenue if revenue else Decimal('0')
+        liability_assets_ratio = liabilities / assets if assets else Decimal('0')
         
-        # Verificar que los períodos coincidan
-        if pl_data.get('period') != balance_data.get('period'):
-            discrepancies.append({
-                'type': 'period_mismatch',
-                'description': f"Los períodos no coinciden: P&L ({pl_data.get('period')}) vs Balance ({balance_data.get('period')})",
-                'severity': 'high'
-            })
+        prompt = RATIO_ANALYSIS_PROMPT.format(
+            revenue_assets_ratio=revenue_assets_ratio,
+            expense_revenue_ratio=expense_revenue_ratio,
+            liability_assets_ratio=liability_assets_ratio
+        )
         
-        # Verificar que la utilidad neta coincida con la utilidad del período en el balance
-        pl_net_income = None
-        for item in pl_data.get('totals', {}).items():
-            if 'utilidad' in item[0].lower() or 'net' in item[0].lower():
-                pl_net_income = item[1]
-                break
+        response = self.generate(prompt)
+        return parse_ratio_response(response)
+    
+    def validate_balance_equation(self, balance_data: Dict) -> List[Dict]:
+        """Valida la ecuación contable usando ADK."""
+        assets = balance_data.get('totals', {}).get('Total Activos', Decimal('0'))
+        liabilities = balance_data.get('totals', {}).get('Total Pasivos', Decimal('0'))
+        equity = balance_data.get('totals', {}).get('Total Capital Contable', Decimal('0'))
         
-        balance_net_income = None
-        for item in balance_data.get('capital_contable', []):
-            if 'utilidad' in item.name.lower() or 'net' in item.name.lower():
-                balance_net_income = item.amount
-                break
+        difference = assets - (liabilities + equity)
         
-        if pl_net_income is not None and balance_net_income is not None:
-            if abs(pl_net_income - balance_net_income) > Decimal('0.01'):
-                discrepancies.append({
-                    'type': 'income_mismatch',
-                    'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
-                    'severity': 'high'
-                })
+        prompt = BALANCE_VALIDATION_PROMPT.format(
+            total_assets=assets,
+            total_liabilities=liabilities,
+            total_equity=equity,
+            difference=difference,
+            tolerance=Decimal('0.01')
+        )
         
-        # Verificar que los totales sean consistentes
-        pl_totals = pl_data.get('totals', {})
-        balance_totals = balance_data.get('totals', {})
-        
-        # Verificar que los ingresos totales sean razonables en comparación con los activos
-        if 'Ingresos Totales' in pl_totals and 'Total Activos' in balance_totals:
-            revenue = pl_totals['Ingresos Totales']
-            assets = balance_totals['Total Activos']
-            if revenue > assets * Decimal('2'):  # Si los ingresos son más del doble de los activos
-                discrepancies.append({
-                    'type': 'unusual_ratio',
-                    'description': f"Los ingresos (${revenue}) son inusualmente altos en comparación con los activos (${assets})",
-                    'severity': 'medium'
-                })
-        
-        # Verificar que los gastos totales sean razonables en comparación con los ingresos
-        if 'Gastos Totales' in pl_totals and 'Ingresos Totales' in pl_totals:
-            expenses = pl_totals['Gastos Totales']
-            revenue = pl_totals['Ingresos Totales']
-            if expenses > revenue:  # Si los gastos son mayores que los ingresos
-                discrepancies.append({
-                    'type': 'expense_ratio',
-                    'description': f"Los gastos (${expenses}) son mayores que los ingresos (${revenue})",
-                    'severity': 'high'
-                })
-        
-        # Verificar que el balance esté balanceado
-        if 'Total Activos' in balance_totals and 'Total Pasivos' in balance_totals and 'Total Capital Contable' in balance_totals:
-            assets = balance_totals['Total Activos']
-            liabilities = balance_totals['Total Pasivos']
-            equity = balance_totals['Total Capital Contable']
-            
-            if abs(assets - (liabilities + equity)) > Decimal('0.01'):
-                discrepancies.append({
-                    'type': 'unbalanced',
-                    'description': f"El balance no está balanceado: Activos (${assets}) ≠ Pasivos (${liabilities}) + Capital (${equity})",
-                    'severity': 'high'
-                })
-        
-        return discrepancies 
+        response = self.generate(prompt)
+        return parse_balance_response(response) 

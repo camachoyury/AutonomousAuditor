@@ -3,6 +3,13 @@ server:
   port: 8080
   debug: true
 
+target_repository:
+  url: "https://github.com/camachoyury/financial-reports"
+  branch: "main"
+  file_patterns:
+    - "**/*.md"
+    - "**/*.csv"
+
 agents:
   - name: FinancialAuditWorkflow
     description: "Agente de flujo de trabajo que orquesta el proceso de auditoría financiera"
