@@ -1,137 +1,82 @@
-import os
-import asyncio
-from fastapi import FastAPI, Request
-import uvicorn
-from google.adk.agents import LlmAgent
-from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
-from google.adk.tools.function_tool import FunctionTool
-from typing import Dict, List, Optional, Any, Union
-from auditor.agent import audit_financial_documents, retrieve_financial_docs, compare_documents, create_github_issue
-import hmac
+"""API del Auditor Financiero: webhook de GitHub y endpoint manual de auditoría."""
+
 import hashlib
+import hmac
+import logging
+import os
+from typing import Any, Dict
 
-# Crear la aplicación FastAPI
-app: FastAPI = FastAPI(title="Auditor Financiero")
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
-# Definir la función de auditoría
-async def run_audit(repo_url: str, branch: str = "main") -> Dict[str, Any]:
-    """Ejecuta una auditoría financiera.
-    
-    Args:
-        repo_url (str): URL del repositorio GitHub a auditar
-        branch (str): Rama del repositorio a auditar (default: "main")
-        
-    Returns:
-        Dict[str, Any]: Resultado de la auditoría con el estado y las discrepancias encontradas
-    """
-    try:
-        result: Dict[str, Any] = audit_financial_documents(repo_url, branch)
-        return result
-    except Exception as e:
-        return {
-            "status": "error",
-            "error_message": str(e)
-        }
+from auditor.agent import audit_financial_documents
+from auditor.utils.validators import validate_repo_url
 
-# Crear el agente LLM
-root_agent: LlmAgent = LlmAgent(
-    name="financial_auditor",
-    model="gemini-2.0-flash",
-    description="Agente para realizar auditorías financieras",
-    instruction="""Soy un agente especializado en auditoría financiera. 
-    Mi tarea es analizar documentos financieros y detectar discrepancias.
-    Puedo recuperar documentos de GitHub, analizarlos y crear issues con los hallazgos.""",
-    tools=[
-        FunctionTool(run_audit),
-        FunctionTool(retrieve_financial_docs),
-        FunctionTool(compare_documents),
-        FunctionTool(create_github_issue)
-    ]
-)
+load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("auditor.api")
 
-# Crear servicio de sesiones
-session_service: InMemorySessionService = InMemorySessionService()
+app = FastAPI(title="Auditor Financiero")
 
-# Crear el runner
-runner: Runner = Runner(
-    agent=root_agent,
-    app_name="financial_auditor",
-    session_service=session_service
-)
 
-async def verify_github_webhook(request: Request) -> bool:
-    """Verifica la firma del webhook de GitHub.
-    
-    Args:
-        request (Request): Request de FastAPI
-        
-    Returns:
-        bool: True si la firma es válida, False en caso contrario
-    """
-    if 'X-Hub-Signature-256' not in request.headers:
+def _verify_signature(body: bytes, signature: str | None) -> bool:
+    """Valida la firma HMAC-SHA256 del webhook. Sin secreto configurado, rechaza todo."""
+    secret = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+    if not secret or not signature:
         return False
-    
-    signature: str = request.headers['X-Hub-Signature-256']
-    secret: bytes = os.getenv('GITHUB_WEBHOOK_SECRET', '').encode()
-    body: bytes = await request.body()
-    
-    expected_signature: str = 'sha256=' + hmac.new(
-        secret,
-        body,
-        hashlib.sha256
-    ).hexdigest()
-    
-    return hmac.compare_digest(signature, expected_signature)
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
 
-@app.post("/webhook/github")
-async def github_webhook(request: Request) -> Dict[str, str]:
-    """Endpoint para el webhook de GitHub.
-    
-    Args:
-        request (Request): Request de FastAPI
-        
-    Returns:
-        Dict[str, str]: Respuesta con el estado de la operación
-    """
-    if not await verify_github_webhook(request):
-        return {"status": "error", "message": "Invalid signature"}
-    
+
+def _background_audit(repo_url: str, branch: str) -> None:
+    result = audit_financial_documents(repo_url, branch)
+    logger.info("Auditoría de %s: %s (%d discrepancias)", repo_url, result["status"], len(result["discrepancies"]))
+
+
+@app.get("/health")
+def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/webhook/github", status_code=202)
+async def github_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_hub_signature_256: str | None = Header(default=None),
+) -> Dict[str, str]:
+    """Recibe el webhook de push de GitHub; la auditoría corre en segundo plano
+    (GitHub exige respuesta en menos de 10 s y la llamada a Gemini puede tardar más)."""
+    body = await request.body()
+    if not _verify_signature(body, x_hub_signature_256):
+        raise HTTPException(status_code=401, detail="Firma inválida")
+
     payload: Dict[str, Any] = await request.json()
-    
-    # Verificar si es un push a main
-    if (payload.get('ref') == 'refs/heads/main' and 
-        payload.get('repository', {}).get('html_url')):
-        
-        repo_url: str = payload['repository']['html_url']
-        result: Dict[str, Any] = await run_audit(repo_url=repo_url, branch='main')
-        return result
-    
-    return {"status": "skipped", "message": "Not a push to main"}
+    repo_url = payload.get("repository", {}).get("html_url")
+    default_branch = payload.get("repository", {}).get("default_branch", "main")
+    if not repo_url or payload.get("ref") != f"refs/heads/{default_branch}":
+        return {"status": "skipped", "message": "No es un push a la rama principal"}
+
+    background_tasks.add_task(_background_audit, repo_url, default_branch)
+    return {"status": "accepted"}
+
 
 @app.post("/audit")
-async def audit_endpoint(repo_url: str, branch: str = "main") -> Dict[str, Any]:
-    """Ejecuta una auditoría financiera.
-    
-    Args:
-        repo_url (str): URL del repositorio a auditar
-        branch (str): Rama del repositorio a auditar
-        
-    Returns:
-        Dict[str, Any]: Resultado de la auditoría
-    """
-    session: Any = session_service.create_session(
-        app_name="financial_auditor",
-        user_id="default_user",
-        session_id="audit_session"
-    )
-    
-    result: Dict[str, Any] = await run_audit(repo_url=repo_url, branch=branch)
-    return result
+def audit_endpoint(repo_url: str, branch: str = "main", x_api_key: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Auditoría manual. Requiere la cabecera X-API-Key igual a AUDIT_API_KEY."""
+    expected = os.getenv("AUDIT_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="AUDIT_API_KEY no está configurada")
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="API key inválida")
+    if not validate_repo_url(repo_url):
+        raise HTTPException(status_code=422, detail="URL de repositorio inválida")
+    return audit_financial_documents(repo_url, branch)
+
 
 def main() -> None:
-    """Función principal que inicia el servidor."""
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="debug")
+    uvicorn.run(app, host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "8000")))
+
 
 if __name__ == "__main__":
-    main() 
+    main()

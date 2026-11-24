@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=80.0.0", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,3 +20,9 @@ classifiers = [
 [project.urls]
 "Homepage" = "https://github.com/camachoyury/AutonomousAuditor"
 "Bug Tracker" = "https://github.com/camachoyury/AutonomousAuditor/issues" 
+
+[tool.setuptools.packages.find]
+include = ["auditor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["auditor/tests"]

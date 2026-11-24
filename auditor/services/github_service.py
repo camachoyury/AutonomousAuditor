@@ -1,6 +1,6 @@
 import os
-from typing import Dict, List, Tuple
-from github import Github
+from typing import Dict, List, Optional, Tuple
+from github import Auth, Github
 from github.ContentFile import ContentFile
 
 from ..core.models import FinancialDocument
@@ -20,7 +20,7 @@ class GitHubService:
         if not token:
             raise ConfigurationError("No se encontró el token de GitHub")
         
-        self.github_client = Github(token)
+        self.github_client = Github(auth=Auth.Token(token))
     
     def _parse_repo_url(self, repo_url: str) -> Tuple[str, str]:
         """Parsea la URL del repositorio para obtener owner y nombre."""
@@ -35,6 +35,11 @@ class GitHubService:
         except Exception:
             raise GitHubError(f"URL de repositorio inválida: {repo_url}")
     
+    @staticmethod
+    def _detect_format(filename: str) -> str:
+        """El formato se deduce de la extensión del archivo."""
+        return FORMAT_CSV if filename.lower().endswith('.csv') else FORMAT_MARKDOWN
+
     def retrieve_documents(self, repo_url: str, branch: str = GITHUB_DEFAULT_BRANCH) -> Dict[str, FinancialDocument]:
         """Recupera los documentos financieros del repositorio."""
         try:
@@ -59,81 +64,67 @@ class GitHubService:
             if not balance_files:
                 raise GitHubError("No se encontraron archivos de Balance General")
             
-            pl_content = repo.get_contents(pl_files[0].path, ref=branch).decoded_content.decode('utf-8')
-            balance_content = repo.get_contents(balance_files[0].path, ref=branch).decoded_content.decode('utf-8')
+            pl_file = repo.get_contents(pl_files[0].path, ref=branch)
+            balance_file = repo.get_contents(balance_files[0].path, ref=branch)
+            pl_content = pl_file.decoded_content.decode('utf-8')
+            balance_content = balance_file.decoded_content.decode('utf-8')
             
             return {
                 'pl': FinancialDocument(
                     content=pl_content,
                     doc_type='pl',
-                    file_format=FORMAT_MARKDOWN if pl_content.strip().startswith('|') else FORMAT_CSV
+                    file_format=self._detect_format(pl_files[0].name)
                 ),
                 'balance': FinancialDocument(
                     content=balance_content,
                     doc_type='balance',
-                    file_format=FORMAT_MARKDOWN if balance_content.strip().startswith('|') else FORMAT_CSV
+                    file_format=self._detect_format(balance_files[0].name)
                 )
             }
             
         except Exception as e:
             raise GitHubError(f"Error al recuperar documentos: {str(e)}")
     
-    def create_or_update_issue(self, discrepancies: List[Dict], repo_url: str) -> str:
-        """Crea o actualiza un issue en GitHub con las discrepancias encontradas."""
+    def create_or_update_issue(self, discrepancies: List[Dict], repo_url: str, period: Optional[str] = None) -> str:
+        """Crea o actualiza el issue de auditoría del período (un issue abierto por período)."""
         try:
             owner, repo_name = self._parse_repo_url(repo_url)
             repo = self.github_client.get_repo(f"{owner}/{repo_name}")
-            
-            title = f"Auditoría Financiera: {len(discrepancies)} discrepancias encontradas"
-            
-            high_severity = [d for d in discrepancies if d['severity'] == 'high']
-            medium_severity = [d for d in discrepancies if d['severity'] == 'medium']
-            low_severity = [d for d in discrepancies if d['severity'] == 'low']
-            
-            body = self._generate_issue_body(high_severity, medium_severity, low_severity)
-            
-            # Buscar issue existente
-            existing_issues = repo.get_issues(state='open')
-            for issue in existing_issues:
+
+            # Título estable: así la siguiente auditoría actualiza el issue en vez de duplicarlo.
+            title = f"Auditoría Financiera - {period}" if period else "Auditoría Financiera"
+            body = self._generate_issue_body(discrepancies)
+
+            for issue in repo.get_issues(state='open'):
                 if issue.title == title:
                     issue.edit(body=body)
                     return issue.html_url
-            
-            # Crear nuevo issue
-            issue = repo.create_issue(
-                title=title,
-                body=body,
-                labels=GITHUB_LABELS
-            )
-            
+
+            issue = repo.create_issue(title=title, body=body, labels=GITHUB_LABELS)
             return issue.html_url
-            
+
         except Exception as e:
             raise GitHubError(f"Error al crear/actualizar issue: {str(e)}")
-    
-    def _generate_issue_body(self, high_severity: List[Dict], medium_severity: List[Dict], low_severity: List[Dict]) -> str:
-        """Genera el cuerpo del issue con las discrepancias encontradas."""
+
+    @staticmethod
+    def _generate_issue_body(discrepancies: List[Dict]) -> str:
+        """Genera el cuerpo del issue agrupando las discrepancias por severidad."""
+        sections = [
+            ('high', '🔴 Discrepancias de Alta Severidad'),
+            ('medium', '🟡 Discrepancias de Severidad Media'),
+            ('low', '🟢 Discrepancias de Baja Severidad'),
+        ]
         body = "# Resultados de la Auditoría Financiera\n\n"
-        
-        if high_severity:
-            body += "## 🔴 Discrepancias de Alta Severidad\n\n"
-            for d in high_severity:
-                body += f"### {d['type']}\n"
+        body += f"Total de discrepancias: **{len(discrepancies)}**\n\n"
+        for severity, heading in sections:
+            items = [d for d in discrepancies if d.get('severity') == severity]
+            if not items:
+                continue
+            body += f"## {heading}\n\n"
+            for d in items:
+                origin = "🤖 Gemini" if d.get('source') == 'gemini' else "📐 Regla"
+                body += f"### {d['type']} ({origin})\n"
                 body += f"- **Descripción**: {d['description']}\n"
-                body += f"- **Solución**: {d['fix']}\n\n"
-        
-        if medium_severity:
-            body += "## 🟡 Discrepancias de Severidad Media\n\n"
-            for d in medium_severity:
-                body += f"### {d['type']}\n"
-                body += f"- **Descripción**: {d['description']}\n"
-                body += f"- **Solución**: {d['fix']}\n\n"
-        
-        if low_severity:
-            body += "## 🟢 Discrepancias de Baja Severidad\n\n"
-            for d in low_severity:
-                body += f"### {d['type']}\n"
-                body += f"- **Descripción**: {d['description']}\n"
-                body += f"- **Solución**: {d['fix']}\n\n"
-        
-        return body 
+                body += f"- **Solución**: {d.get('fix', 'No hay propuesta específica.')}\n\n"
+        body += "---\nGenerado automáticamente por Autonomous Financial Auditor.\n"
+        return body

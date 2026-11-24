@@ -92,7 +92,7 @@ def test_create_issue(github_service, mock_github, mock_repo):
 def test_update_existing_issue(github_service, mock_github, mock_repo):
     """Prueba la actualización de un issue existente."""
     existing_issue = Mock()
-    existing_issue.title = "Auditoría Financiera: 1 discrepancias encontradas"
+    existing_issue.title = "Auditoría Financiera - 2024-Q1"
     existing_issue.html_url = 'https://github.com/owner/repo/issues/1'
     mock_repo.get_issues.return_value = [existing_issue]
     mock_github.return_value.get_repo.return_value = mock_repo
@@ -105,7 +105,8 @@ def test_update_existing_issue(github_service, mock_github, mock_repo):
             'severity': 'high',
             'fix': 'Test fix'
         }],
-        'https://github.com/owner/repo'
+        'https://github.com/owner/repo',
+        period='2024-Q1'
     )
     
     assert issue_url == 'https://github.com/owner/repo/issues/1'
@@ -114,6 +115,19 @@ def test_update_existing_issue(github_service, mock_github, mock_repo):
 
 def test_invalid_repo_url():
     """Prueba el manejo de URLs de repositorio inválidas."""
-    service = GitHubService()
+    with patch.dict('os.environ', {'GITHUB_TOKEN': 'test_token'}):
+        service = GitHubService()
     with pytest.raises(GitHubError):
-        service.retrieve_documents('invalid-url') 
+        service.retrieve_documents('invalid-url')
+
+def test_format_detected_from_extension():
+    """Un Markdown que empieza con '#' no debe confundirse con CSV."""
+    assert GitHubService._detect_format('pl.md') == 'markdown'
+    assert GitHubService._detect_format('Balance.CSV') == 'csv'
+
+def test_issue_body_marks_gemini_findings():
+    body = GitHubService._generate_issue_body([
+        {'type': 'a', 'description': 'd', 'severity': 'high', 'fix': 'f', 'source': 'rules'},
+        {'type': 'llm_b', 'description': 'd', 'severity': 'low', 'fix': 'f', 'source': 'gemini'},
+    ])
+    assert '📐 Regla' in body and '🤖 Gemini' in body 

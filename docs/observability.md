@@ -7,7 +7,7 @@
 {
     "timestamp": "ISO8601",
     "level": "INFO|WARNING|ERROR",
-    "agent": "DocumentRetrieverAgent|DocumentParserAgent|ComparisonAgent|IssueManagerAgent",
+    "component": "GitHubService|DocumentService|AuditService|LLMAuditService",
     "action": "retrieve|parse|compare|create_issue",
     "status": "success|failure",
     "duration_ms": 123,
@@ -31,22 +31,22 @@
 
 ### Métricas de Agentes
 ```python
-# DocumentRetrieverAgent
+# GitHubService
 document_retrieval_duration_seconds
 document_retrieval_success_total
 document_retrieval_failure_total
 
-# DocumentParserAgent
+# DocumentService
 document_parsing_duration_seconds
 document_parsing_success_total
 document_parsing_failure_total
 
-# ComparisonAgent
+# AuditService / LLMAuditService
 comparison_duration_seconds
 discrepancies_found_total
 validation_success_total
 
-# IssueManagerAgent
+# GitHubService (issues)
 issue_creation_duration_seconds
 issue_creation_success_total
 issue_creation_failure_total

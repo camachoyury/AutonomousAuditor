@@ -3,34 +3,26 @@
 ```mermaid
 graph TD
     subgraph GitHub
-        A[Repositorio Financiero] -->|Push/Trigger| B[Webhook]
+        A[Repo de reportes] -->|push a main| B[Webhook / Action]
     end
 
     subgraph Auditor
-        B -->|Evento| C[GitHub Actions]
-        C -->|Inicia| D[Docker Container]
-        
-        subgraph Agentes
-            D --> E[DocumentRetrieverAgent]
-            E -->|Docs| F[DocumentParserAgent]
-            F -->|Parsed Data| G[ComparisonAgent]
-            G -->|Analysis| H[IssueManagerAgent]
-        end
-        
-        H -->|Create/Update| I[GitHub Issue]
+        B -->|POST /webhook/github| C[FastAPI app.py]
+        C --> S[AuditService]
+        S --> R[GitHubService: recuperar P&L y Balance]
+        R --> P[DocumentService: parsear a datos estructurados]
+        P --> V[Reglas deterministas]
+        V --> L[LLMAuditService: agente ADK + Gemini]
+        L --> M[Hallazgos combinados]
+        M --> I[GitHubService: crear/actualizar Issue]
     end
 
-    subgraph ADK Core
-        J[Modelo Gemini] -->|Prompts| G
-        K[Validadores] -->|Rules| G
-        L[Parsers] -->|Format| F
-    end
+    I -->|Issue por periodo| A
+    G[Gemini API] <-->|salida estructurada| L
 ```
 
 ## Leyenda
 
-- **GitHub**: Repositorio fuente y sistema de eventos
-- **Auditor**: Sistema principal de auditoría
-- **ADK Core**: Núcleo del sistema de desarrollo autónomo
-- **Flechas**: Flujo de datos y eventos
-- **Subgraphs**: Agrupación lógica de componentes 
+- **Reglas deterministas**: periodo, utilidad neta, ecuación contable y ratios; exactas y sin costo.
+- **LLMAuditService**: `LlmAgent` de Google ADK con `output_schema`; revisa totales, clasificación y anomalías que las reglas no cubren. Si falla, la auditoría continúa solo con las reglas.
+- **Issue por periodo**: el título es estable (`Auditoría Financiera - <periodo>`), por lo que cada auditoría actualiza el issue abierto en lugar de duplicarlo.

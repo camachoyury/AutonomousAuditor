@@ -17,3 +17,7 @@ class ValidationError(FinancialAuditError):
 class ConfigurationError(FinancialAuditError):
     """Error en la configuración del sistema."""
     pass 
+
+class LLMError(FinancialAuditError):
+    """Error al consultar el modelo de lenguaje."""
+    pass

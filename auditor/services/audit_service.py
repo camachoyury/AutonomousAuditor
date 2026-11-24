@@ -1,63 +1,79 @@
-from typing import Dict, List, Optional
+import logging
 from decimal import Decimal
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
-from ..core.models import FinancialDocument, AuditResult
-from ..core.exceptions import ValidationError
+from ..core.models import AuditResult
 from ..core.constants import TOLERANCE
+from ..core.exceptions import LLMError
 from .document_service import DocumentService
 from .github_service import GitHubService
+from .llm_service import LLMAuditService
 
-@dataclass
-class AuditResult:
-    """Resultado de una auditoría."""
-    status: str
-    discrepancies: List[Dict]
-    issue_url: Optional[str] = None
+logger = logging.getLogger(__name__)
+
 
 class AuditService:
-    """Servicio para realizar auditorías financieras."""
+    """Orquesta la auditoría: recuperar -> parsear -> reglas -> Gemini -> reportar."""
 
-    def __init__(self, document_service: Optional[DocumentService] = None, github_service: Optional[GitHubService] = None):
-        """Inicializa el servicio de auditoría."""
+    def __init__(
+        self,
+        document_service: Optional[DocumentService] = None,
+        github_service: Optional[GitHubService] = None,
+        llm_service: Optional[LLMAuditService] = None,
+    ):
         self.document_service = document_service or DocumentService()
-        self.github_service = github_service or GitHubService()
+        self._github_service = github_service
+        self.llm_service = llm_service or LLMAuditService()
+
+    @property
+    def github_service(self) -> GitHubService:
+        """Se crea bajo demanda: el análisis local (demo) no necesita token de GitHub."""
+        if self._github_service is None:
+            self._github_service = GitHubService()
+        return self._github_service
+
+    def analyze(self, pl_data: Dict, balance_data: Dict) -> Tuple[List[Dict], bool, Optional[str]]:
+        """Reglas deterministas + revisión con Gemini.
+
+        Devuelve (discrepancias, gemini_usado, error_de_gemini). Si Gemini falla,
+        se conservan los hallazgos de las reglas.
+        """
+        discrepancies = self.compare_documents(pl_data, balance_data)
+        if not self.llm_service.enabled:
+            return discrepancies, False, None
+        try:
+            discrepancies += self.llm_service.review(pl_data, balance_data, discrepancies)
+            return discrepancies, True, None
+        except LLMError as exc:
+            logger.warning("Se omite el análisis con Gemini: %s", exc)
+            return discrepancies, False, str(exc)
 
     def run_audit(self, repo_url: str, branch: str = "main") -> AuditResult:
-        """Ejecuta una auditoría financiera completa."""
+        """Ejecuta una auditoría completa sobre un repo de GitHub y reporta en un Issue."""
         try:
-            # 1. Recuperar documentos
             docs = self.github_service.retrieve_documents(repo_url, branch)
-            
-            # 2. Parsear documentos
             pl_data = self.document_service.parse_document(docs['pl'])
             balance_data = self.document_service.parse_document(docs['balance'])
-            
-            # 3. Comparar documentos
-            discrepancies = self.compare_documents(pl_data, balance_data)
-            
-            # 4. Crear/actualizar issue
+
+            discrepancies, llm_used, llm_error = self.analyze(pl_data, balance_data)
+
             issue_url = None
             if discrepancies:
-                issue_url = self.github_service.create_or_update_issue(discrepancies, repo_url)
-            
+                issue_url = self.github_service.create_or_update_issue(
+                    discrepancies, repo_url, period=pl_data.get('period')
+                )
+
             return AuditResult(
                 status="success",
                 discrepancies=discrepancies,
-                issue_url=issue_url
+                issue_url=issue_url,
+                llm_used=llm_used,
+                llm_error=llm_error,
             )
-            
+
         except Exception as e:
-            return AuditResult(
-                status="error",
-                discrepancies=[{
-                    'type': 'system_error',
-                    'description': str(e),
-                    'severity': 'high',
-                    'fix': 'Contacta al equipo de soporte'
-                }],
-                issue_url=None
-            )
+            logger.exception("Falló la auditoría de %s", repo_url)
+            return AuditResult(status="error", discrepancies=[], error_message=str(e))
 
     def compare_documents(self, pl_data: Dict, balance_data: Dict) -> List[Dict]:
         """Compara los documentos financieros y detecta inconsistencias."""
@@ -83,18 +99,6 @@ class AuditService:
                     'description': f"La utilidad neta no coincide: P&L (${pl_net_income}) vs Balance (${balance_net_income})",
                     'severity': 'high',
                     'fix': f"Ajustar la utilidad neta en el Balance General para que coincida con el P&L: ${pl_net_income}"
-                })
-        
-        # Verificar cambios en ganancias retenidas
-        retained_earnings = self._find_retained_earnings(balance_data)
-        if retained_earnings is not None and pl_net_income is not None:
-            expected_retained_earnings = retained_earnings + pl_net_income
-            if abs(expected_retained_earnings - retained_earnings) > TOLERANCE:
-                discrepancies.append({
-                    'type': 'retained_earnings_mismatch',
-                    'description': f"Las ganancias retenidas no reflejan la utilidad del período. Actual: ${retained_earnings}, Esperado: ${expected_retained_earnings}",
-                    'severity': 'high',
-                    'fix': f"Ajustar las ganancias retenidas para incluir la utilidad del período: ${expected_retained_earnings}"
                 })
         
         # Verificar que los totales sean consistentes
@@ -139,6 +143,8 @@ class AuditService:
                     'fix': f"Ajustar las cuentas para mantener la ecuación contable: A = P + C. Diferencia actual: ${abs(assets - (liabilities + equity))}"
                 })
         
+        for d in discrepancies:
+            d.setdefault('source', 'rules')
         return discrepancies
 
     def _find_net_income(self, data: Dict) -> Optional[Decimal]:
@@ -154,10 +160,3 @@ class AuditService:
                 return item.amount
         
         return None
-
-    def _find_retained_earnings(self, data: Dict) -> Optional[Decimal]:
-        """Busca las ganancias retenidas en los datos."""
-        for item in data.get('capital_contable', []):
-            if 'retenidas' in item.name.lower() or 'retained' in item.name.lower():
-                return item.amount
-        return None 

@@ -24,4 +24,6 @@ class AuditResult:
     status: str
     discrepancies: List[Dict]
     issue_url: Optional[str] = None
-    error_message: Optional[str] = None 
+    error_message: Optional[str] = None
+    llm_used: bool = False
+    llm_error: Optional[str] = None 

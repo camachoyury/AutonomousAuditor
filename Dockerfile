@@ -1,26 +1,18 @@
-# Usar una imagen base de Python
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Crear y establecer el directorio de trabajo
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
-# Instalar dependencias del sistema
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copiar archivos de requisitos
 COPY requirements.txt .
-
-# Instalar dependencias de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente y el archivo .env
 COPY . .
+RUN pip install --no-cache-dir -e . && useradd --create-home appuser && chown -R appuser /app
+USER appuser
 
-# Instalar el paquete en modo desarrollo
-RUN pip install -e .
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
 
-# Comando por defecto
-CMD ["python", "-m", "auditor.agent"] 
+# Servidor API (webhook + /audit). Para una auditoría única: python -m auditor.agent
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]

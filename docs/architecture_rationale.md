@@ -2,62 +2,37 @@
 
 ## Componentes Principales
 
-### 1. GitHub Integration Layer
-- **Webhook**: Captura eventos de push y triggers manuales
-- **GitHub Actions**: Orquesta el flujo de trabajo
-- **Docker Container**: Proporciona aislamiento y consistencia
+### 1. Capa de entrada
+- **Webhook de GitHub** (`POST /webhook/github`): firma HMAC-SHA256 obligatoria; responde 202 y audita en segundo plano.
+- **`POST /audit`**: auditoría manual protegida con `X-API-Key`.
+- **CLI**: `python -m auditor.agent` audita un repo de GitHub; `python -m auditor.demo` audita archivos locales sin GitHub.
+- **Docker**: imagen opcional para la API (`docker compose up`).
 
-### 2. Agent Layer
-- **DocumentRetrieverAgent**: 
-  - Obtiene documentos financieros
-  - Maneja autenticación y permisos
-  - Gestiona caché de documentos
+### 2. Servicios (`auditor/services`)
+- **GitHubService**: localiza P&L y Balance, y crea/actualiza el Issue del periodo.
+- **DocumentService**: convierte Markdown/CSV a datos estructurados con `Decimal`.
+- **AuditService**: orquesta el flujo y aplica las reglas deterministas.
+- **LLMAuditService**: agente ADK (`LlmAgent`) con Gemini y salida estructurada (Pydantic).
 
-- **DocumentParserAgent**:
-  - Parsea documentos Markdown/CSV
-  - Normaliza datos financieros
-  - Valida formato y estructura
-
-- **ComparisonAgent**:
-  - Analiza consistencia entre documentos
-  - Valida ecuaciones contables
-  - Calcula ratios financieros
-
-- **IssueManagerAgent**:
-  - Crea/actualiza issues
-  - Prioriza discrepancias
-  - Sugiere correcciones
-
-### 3. ADK Core
-- **Modelo Gemini**: Procesamiento de lenguaje natural
-- **Sistema de Prompts**: Reglas de validación financiera
-- **Parsers**: Conversión de formatos
+### 3. Por qué reglas + LLM
+- Las **reglas** son exactas, reproducibles y gratuitas: las identidades contables no deben depender de un modelo.
+- **Gemini** aporta lo que las reglas no pueden enumerar: totales que no suman, partidas mal clasificadas, montos anómalos y explicaciones accionables.
+- Gemini recibe los hallazgos de las reglas para no repetirlos, usa temperatura 0 y devuelve JSON validado; cada hallazgo queda marcado con su origen.
+- Si Gemini no está disponible (sin API key, cuota, error), la auditoría sigue con las reglas y el resultado lo indica (`llm_error`).
 
 ## Flujo de Datos
 
-### 1. Trigger Flow
 ```mermaid
 sequenceDiagram
-    GitHub->>Webhook: Push/Trigger
-    Webhook->>Actions: Evento
-    Actions->>Docker: Inicia Container
-```
-
-### 2. Processing Flow
-```mermaid
-sequenceDiagram
-    Retriever->>Parser: Docs
-    Parser->>Comparison: Parsed Data
-    Comparison->>IssueManager: Analysis
-    IssueManager->>GitHub: Create/Update Issue
-```
-
-### 3. Feedback Flow
-```mermaid
-sequenceDiagram
-    Issue->>Repo: Correcciones
-    Repo->>Webhook: Nuevo Push
-    Analysis->>Prompts: Mejoras
+    GitHub->>API: push (webhook firmado)
+    API->>GitHubService: recuperar documentos
+    GitHubService->>DocumentService: contenido md/csv
+    DocumentService->>AuditService: datos estructurados
+    AuditService->>AuditService: reglas deterministas
+    AuditService->>LLMAuditService: datos + hallazgos de reglas
+    LLMAuditService->>Gemini: prompt + esquema JSON
+    Gemini-->>AuditService: hallazgos adicionales
+    AuditService->>GitHubService: crear/actualizar Issue
 ```
 
 ## Modos de Fallo
